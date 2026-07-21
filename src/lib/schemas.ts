@@ -28,7 +28,7 @@ export const productSchema = z
     reviews: z.number().int().min(0),
     inStock: z.boolean(),
     tags: z.array(z.string().min(1)).min(1),
-    images: z.array(z.url()).min(1),
+    images: z.array(z.url()),
   })
   .refine((data) => data.originalPrice >= data.price, {
     path: ['originalPrice'],
