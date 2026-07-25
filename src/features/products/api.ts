@@ -1,6 +1,6 @@
 import type { Product, ProductFilters, ProductInsert, ProductListResult, ProductUpdate } from '@/types/product';
-import { STORAGE_BUCKET, supabase } from '@/lib/supabase';
-import { parseStoragePathFromUrl } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
+import { deleteFromR2, deleteR2Folder, parseR2KeyFromUrl, uploadToR2 } from '@/lib/r2';
 import type { Database } from '@/types/database';
 import imageCompression from 'browser-image-compression';
 
@@ -157,7 +157,7 @@ export async function duplicateProduct(product: Product): Promise<Product> {
   };
   const newProduct = await createProduct(payload);
 
-  // 2. Copy each image into the new product's own folder
+  // 2. Copy each image into the new product's own R2 folder
   if (product.images.length > 0) {
     const copiedUrls = await copyImagesToFolder(product.images, String(newProduct.id));
     await updateProduct(newProduct.id, { images: copiedUrls });
@@ -197,39 +197,23 @@ export async function updateProduct(id: number, payload: ProductUpdate): Promise
 }
 
 export async function deleteProduct(id: number): Promise<void> {
-  // Delete all images in the product's folder, then delete the DB record
+  // Delete all images in the product's R2 folder, then remove the DB record
   await deleteProductFolder(String(id));
   const { error } = await supabase.from('Products').delete().eq('id', id);
   if (error) throw error;
 }
 
-/** Delete every file inside products/{folderName}/ in storage */
+/**
+ * Delete every R2 object inside products/{folderName}/ via the Worker proxy.
+ * Uses a single DELETE /delete-folder/:productId call (bulk delete on the Worker).
+ */
 export async function deleteProductFolder(folderName: string): Promise<void> {
-  const prefix = `products/${folderName}/`;
-
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.access_token) return;
-
-  // List all files in the folder (max 1000)
-  const { data: files } = await supabase.storage
-    .from(STORAGE_BUCKET)
-    .list(`products/${folderName}`, { limit: 1000 });
-
-  if (!files || files.length === 0) return;
-
-  const paths = files
-    .filter((f) => f.name !== '.emptyFolderPlaceholder')
-    .map((f) => `${prefix}${f.name}`);
-
-  if (paths.length === 0) return;
-  await supabase.storage.from(STORAGE_BUCKET).remove(paths);
+  await deleteR2Folder(folderName);
 }
 
 /**
- * Download each URL and re-upload it under products/{destFolder}/
- * Returns the new public URLs.
+ * Download each image URL and re-upload it to R2 under products/{destFolder}/.
+ * Returns the new public Worker URLs.
  */
 export async function copyImagesToFolder(
   sourceUrls: string[],
@@ -253,15 +237,11 @@ export async function copyImagesToFolder(
   return results;
 }
 
+/**
+ * Compress and upload a product image to R2 via the Worker proxy.
+ * Returns the public Worker URL (e.g. https://<worker>/products/<productId>/<uuid>.<ext>).
+ */
 export async function uploadProductImage(file: File, productKey: string): Promise<string> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session?.access_token) {
-    throw new Error('You must be logged in to upload images');
-  }
-
   let fileToUpload = file;
   try {
     const options = {
@@ -278,58 +258,17 @@ export async function uploadProductImage(file: File, productKey: string): Promis
 
   const rawExt = fileToUpload.name.split('.').pop()?.toLowerCase() ?? 'jpg';
   const ext = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(rawExt) ? rawExt : 'jpg';
-  const path = `products/${productKey}/${crypto.randomUUID()}.${ext}`;
-  const contentType = fileToUpload.type || `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+  const filename = `${crypto.randomUUID()}.${ext}`;
 
-  const baseUrl = import.meta.env.VITE_SUPABASE_URL.replace(/\/$/, '');
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-  const uploadUrl = `${baseUrl}/storage/v1/object/${encodeURIComponent(STORAGE_BUCKET)}/${path}`;
-
-  // Use the logged-in user's JWT so Storage RLS sees role = authenticated
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      apikey: anonKey,
-      'Content-Type': contentType,
-      'x-upsert': 'false',
-      'cache-control': '3600',
-    },
-    body: fileToUpload,
-  });
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    const message = body?.message ?? 'Image upload failed';
-
-    if (message.toLowerCase().includes('row-level security')) {
-      throw new Error(
-        'Storage RLS blocked this upload. Open Supabase → SQL Editor and run the script in supabase/storage-policies.sql',
-      );
-    }
-
-    throw new Error(message);
-  }
-
-  const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  return uploadToR2(fileToUpload, productKey, filename);
 }
 
+/**
+ * Delete one or more product images from R2 by their public Worker URLs.
+ * Silently skips any URL that cannot be parsed as an R2 key.
+ */
 export async function deleteImagesFromStorage(urls: string[]): Promise<void> {
-  const paths = urls
-    .map(parseStoragePathFromUrl)
-    .filter((p): p is string => Boolean(p));
+  const keys = urls.map(parseR2KeyFromUrl).filter((k): k is string => Boolean(k));
 
-  if (paths.length === 0) return;
-
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session?.access_token) {
-    throw new Error('You must be logged in to delete images');
-  }
-
-  const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(paths);
-  if (error) throw error;
+  await Promise.allSettled(keys.map((key) => deleteFromR2(key)));
 }

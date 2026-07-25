@@ -27,16 +27,8 @@ export function computeDiscountPercent(originalPrice: number, salePrice: number)
   return Math.round(((originalPrice - salePrice) / originalPrice) * 10000) / 100;
 }
 
-export function parseStoragePathFromUrl(url: string): string | null {
-  try {
-    const marker = '/object/public/';
-    const idx = url.indexOf(marker);
-    if (idx === -1) return null;
-    const after = url.slice(idx + marker.length);
-    const slash = after.indexOf('/');
-    if (slash === -1) return null;
-    return decodeURIComponent(after.slice(slash + 1));
-  } catch {
-    return null;
-  }
+export function parseStoragePathFromUrl(_url: string): string | null {
+  // Supabase Storage removed — this function is no longer used.
+  // R2 URL parsing is handled by parseR2KeyFromUrl in @/lib/r2.
+  return null;
 }
