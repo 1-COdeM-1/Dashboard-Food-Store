@@ -10,14 +10,25 @@
  *   VITE_R2_UPLOAD_SECRET    — must match R2_WORKER_AUTH_SECRET in the Worker's env vars
  */
 
-const WORKER_BASE_URL = (import.meta.env.VITE_R2_WORKER_BASE_URL as string)?.replace(/\/$/, '');
-const UPLOAD_SECRET = import.meta.env.VITE_R2_UPLOAD_SECRET as string;
+const WORKER_BASE_URL = (import.meta.env.VITE_R2_WORKER_BASE_URL as string | undefined)?.replace(
+  /\/$/,
+  '',
+);
+const UPLOAD_SECRET = import.meta.env.VITE_R2_UPLOAD_SECRET as string | undefined;
 
-if (!WORKER_BASE_URL) {
-  throw new Error('Missing VITE_R2_WORKER_BASE_URL in .env');
-}
-if (!UPLOAD_SECRET) {
-  throw new Error('Missing VITE_R2_UPLOAD_SECRET in .env');
+/** Validates config at call-time, not at module load. Prevents app crash on startup. */
+function getConfig(): { workerBaseUrl: string; uploadSecret: string } {
+  if (!WORKER_BASE_URL) {
+    throw new Error(
+      'Missing VITE_R2_WORKER_BASE_URL — add it to your Vercel environment variables and redeploy.',
+    );
+  }
+  if (!UPLOAD_SECRET) {
+    throw new Error(
+      'Missing VITE_R2_UPLOAD_SECRET — add it to your Vercel environment variables and redeploy.',
+    );
+  }
+  return { workerBaseUrl: WORKER_BASE_URL, uploadSecret: UPLOAD_SECRET };
 }
 
 // ── Upload ────────────────────────────────────────────────────────────────────
@@ -32,12 +43,13 @@ export async function uploadToR2(
   productId: string,
   filename: string,
 ): Promise<string> {
-  const url = `${WORKER_BASE_URL}/upload/${encodeURIComponent(productId)}/${encodeURIComponent(filename)}`;
+  const { workerBaseUrl, uploadSecret } = getConfig();
+  const url = `${workerBaseUrl}/upload/${encodeURIComponent(productId)}/${encodeURIComponent(filename)}`;
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      'X-Auth-Token': UPLOAD_SECRET,
+      'X-Auth-Token': uploadSecret,
       'Content-Type': file.type || 'application/octet-stream',
     },
     body: file,
@@ -59,11 +71,12 @@ export async function uploadToR2(
  * 404 responses are silently ignored (object may have already been deleted).
  */
 export async function deleteFromR2(key: string): Promise<void> {
-  const url = `${WORKER_BASE_URL}/delete/${encodeURIComponent(key)}`;
+  const { workerBaseUrl, uploadSecret } = getConfig();
+  const url = `${workerBaseUrl}/delete/${encodeURIComponent(key)}`;
 
   const response = await fetch(url, {
     method: 'DELETE',
-    headers: { 'X-Auth-Token': UPLOAD_SECRET },
+    headers: { 'X-Auth-Token': uploadSecret },
   });
 
   // 404 = already gone — treat as success
@@ -80,11 +93,12 @@ export async function deleteFromR2(key: string): Promise<void> {
  * Uses the Worker's /delete-folder/:productId route (single HTTP call).
  */
 export async function deleteR2Folder(productId: string): Promise<void> {
-  const url = `${WORKER_BASE_URL}/delete-folder/${encodeURIComponent(productId)}`;
+  const { workerBaseUrl, uploadSecret } = getConfig();
+  const url = `${workerBaseUrl}/delete-folder/${encodeURIComponent(productId)}`;
 
   const response = await fetch(url, {
     method: 'DELETE',
-    headers: { 'X-Auth-Token': UPLOAD_SECRET },
+    headers: { 'X-Auth-Token': uploadSecret },
   });
 
   if (!response.ok) {
