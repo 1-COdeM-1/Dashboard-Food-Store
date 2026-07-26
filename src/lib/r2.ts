@@ -10,22 +10,27 @@
  *   VITE_R2_UPLOAD_SECRET    — must match R2_WORKER_AUTH_SECRET in the Worker's env vars
  */
 
-const WORKER_BASE_URL = (import.meta.env.VITE_R2_WORKER_BASE_URL as string | undefined)?.replace(
-  /\/$/,
-  '',
-);
-const UPLOAD_SECRET = import.meta.env.VITE_R2_UPLOAD_SECRET as string | undefined;
+// Fallback to hardcoded values so the build works even if Vercel env vars
+// are not set. The preferred way is via Vercel Dashboard → Environment Variables.
+const WORKER_BASE_URL = (
+  (import.meta.env.VITE_R2_WORKER_BASE_URL as string | undefined) ??
+  'https://chickenspicy-image-proxy.obitachi3840.workers.dev'
+).replace(/\/$/, '');
 
-/** Validates config at call-time, not at module load. Prevents app crash on startup. */
+const UPLOAD_SECRET =
+  (import.meta.env.VITE_R2_UPLOAD_SECRET as string | undefined) ??
+  'r2up_9e4b7f2a1c8d3e6f0b5a2c4e7f9a1b3c';
+
+/** Returns config — throws only if both the env var AND the fallback are somehow empty. */
 function getConfig(): { workerBaseUrl: string; uploadSecret: string } {
   if (!WORKER_BASE_URL) {
     throw new Error(
-      'Missing VITE_R2_WORKER_BASE_URL — add it to your Vercel environment variables and redeploy.',
+      'Missing VITE_R2_WORKER_BASE_URL — set it in Vercel Dashboard → Environment Variables.',
     );
   }
   if (!UPLOAD_SECRET) {
     throw new Error(
-      'Missing VITE_R2_UPLOAD_SECRET — add it to your Vercel environment variables and redeploy.',
+      'Missing VITE_R2_UPLOAD_SECRET — set it in Vercel Dashboard → Environment Variables.',
     );
   }
   return { workerBaseUrl: WORKER_BASE_URL, uploadSecret: UPLOAD_SECRET };
